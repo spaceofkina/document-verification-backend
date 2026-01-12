@@ -1,33 +1,39 @@
-// backend/src/services/ocrService.js - UPDATED WITH CORRECT ENDPOINTS
+// backend/src/services/ocrService.js - FIXED WITH HARCODED URLS
 const axios = require('axios');
 const Tesseract = require('tesseract.js');
 const sharp = require('sharp');
 
 class OCRService {
     constructor() {
-        this.pythonBaseUrl = 'http://127.0.0.1:5000';
-        this.ocrEndpoint = '/upload/ocr';
-        this.classifyEndpoint = '/upload/classify';
-        this.verifyEndpoint = '/upload/verify';
+        // ✅ HARDCORE THE CORRECT URLs
+        this.PYTHON_OCR_URL = 'http://127.0.0.1:5000/upload/ocr';
+        this.PYTHON_CLASSIFY_URL = 'http://127.0.0.1:5000/upload/classify';
+        this.PYTHON_VERIFY_URL = 'http://127.0.0.1:5000/upload/verify';
+        
+        console.log('🔧 OCRService Initialized:');
+        console.log('   OCR URL:', this.PYTHON_OCR_URL);
     }
 
     async extractTextFromImage(imageBuffer, idType = null) {
         try {
             console.log('🔍 Extracting text via Python OCR...');
+            console.log('📡 URL:', this.PYTHON_OCR_URL);
             const startTime = Date.now();
             
             // Use FormData for Python API
             const FormData = require('form-data');
             const formData = new FormData();
-            formData.append('image', imageBuffer, 'ph_document.jpg');
+            
+            // ✅ CORRECT FIELD NAME: "file"
+            formData.append('file', imageBuffer, 'ph_document.jpg');
             
             if (idType) {
-                formData.append('document_type', idType);
+                formData.append('idType', idType);
             }
             
-            // Call Python OCR endpoint
+            // Call Python OCR endpoint with HARCODED URL
             const response = await axios.post(
-                `${this.pythonBaseUrl}${this.ocrEndpoint}`,
+                this.PYTHON_OCR_URL,
                 formData,
                 {
                     headers: {
@@ -40,18 +46,18 @@ class OCRService {
             
             const processingTime = Date.now() - startTime;
             
-            console.log(`✅ OCR Complete (${processingTime}ms): ${response.data.confidence?.toFixed(1) || 'N/A'}% confidence`);
+            if (!response.data.success) {
+                throw new Error(`Python OCR error: ${response.data.error}`);
+            }
+            
+            console.log(`✅ Python OCR complete in ${processingTime}ms`);
             
             // Parse Python response
             const pythonResult = response.data;
+            
             const result = {
-                text: pythonResult.text || 
-                      pythonResult.extracted_text || 
-                      pythonResult.ocr_text || 
-                      '',
-                confidence: pythonResult.confidence || 
-                           pythonResult.confidence_score || 
-                           0.85,
+                text: pythonResult.text || '',
+                confidence: pythonResult.confidence || 0.0,
                 words: pythonResult.words || [],
                 lines: pythonResult.lines || [],
                 processingTime: processingTime,
@@ -67,49 +73,18 @@ class OCRService {
             return result;
             
         } catch (error) {
-            console.error('Python OCR error:', error.message);
+            console.error('❌ Python OCR error:');
+            console.error('   Message:', error.message);
             
             if (error.response) {
-                console.error('Error response:', error.response.data);
-                console.error('Error status:', error.response.status);
+                console.error('   Status:', error.response.status);
+                console.error('   Data:', error.response.data);
+                console.error('   URL called:', error.config?.url);
             }
             
             // Fallback to JavaScript Tesseract
             console.log('⚠️ Falling back to JavaScript Tesseract...');
             return await this.extractWithTesseract(imageBuffer, idType);
-        }
-    }
-
-    async extractTextFromPDF(pdfBuffer) {
-        try {
-            console.log('🔍 Extracting text from PDF via Python OCR...');
-            
-            const FormData = require('form-data');
-            const formData = new FormData();
-            formData.append('pdf', pdfBuffer, 'document.pdf');
-            
-            const response = await axios.post(
-                `${this.pythonBaseUrl}${this.ocrEndpoint}`,
-                formData,
-                {
-                    headers: {
-                        ...formData.getHeaders(),
-                        'Content-Type': 'multipart/form-data'
-                    },
-                    timeout: 30000
-                }
-            );
-            
-            return {
-                text: response.data.text || '',
-                confidence: response.data.confidence || 0.8,
-                pages: response.data.pages || 1,
-                backend: 'Python PDF OCR'
-            };
-            
-        } catch (error) {
-            console.error('PDF OCR error:', error.message);
-            return await this.extractWithTesseract(pdfBuffer);
         }
     }
 
@@ -128,7 +103,7 @@ class OCRService {
 
             const result = await Tesseract.recognize(
                 processedBuffer,
-                ['eng', 'fil'], // English and Filipino
+                ['eng', 'fil'],
                 {
                     logger: m => {
                         if (m.status === 'recognizing text') {
@@ -257,17 +232,26 @@ class OCRService {
         }
     }
     
-    async completeVerification(imageBuffer, selectedIdType) {
+    async completeVerification(imageBuffer, selectedIdType, userData = {}) {
         try {
             console.log('🔍 Complete verification via Python API...');
+            console.log('📡 URL:', this.PYTHON_VERIFY_URL);
             
             const FormData = require('form-data');
             const formData = new FormData();
-            formData.append('image', imageBuffer, 'ph_document.jpg');
-            formData.append('selected_type', selectedIdType);
+            
+            formData.append('file', imageBuffer, 'ph_document.jpg');
+            formData.append('userSelectedType', selectedIdType);
+            
+            if (userData.fullName) {
+                formData.append('userFullName', userData.fullName);
+            }
+            if (userData.address) {
+                formData.append('userAddress', userData.address);
+            }
             
             const response = await axios.post(
-                `${this.pythonBaseUrl}${this.verifyEndpoint}`,
+                this.PYTHON_VERIFY_URL,
                 formData,
                 {
                     headers: {
