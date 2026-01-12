@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');  // ADD THIS
 require('dotenv').config();
 
 const app = express();
@@ -6,11 +7,39 @@ const app = express();
 // Middleware
 app.use(express.json());
 
+// ===== DATABASE CONNECTION =====
+const connectDB = async () => {
+    try {
+        console.log('🔗 Attempting to connect to MongoDB...');
+        const conn = await mongoose.connect(process.env.MONGODB_URI, {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+        });
+        console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
+        
+        // Create default admin and staff accounts
+        const User = require('./src/models/User');
+        await User.createBrgyLajongAdmin();
+        await User.createBrgyLajongStaff();
+        
+    } catch (error) {
+        console.error(`❌ MongoDB Connection Error: ${error.message}`);
+        console.log('⚠️  Authentication may not work without database connection');
+    }
+};
+
+// Call connectDB
+connectDB();
+
 // Import routes
 const apiRoutes = require('./src/routes/api');
+const authRoutes = require('./src/routes/authRoutes');
+const userRoutes = require('./src/routes/userRoutes');
 
 // Use API routes
 app.use('/api', apiRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 
 // Basic routes
 app.get('/', (req, res) => {
@@ -52,7 +81,7 @@ app.get('/health', (req, res) => {
     });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`
     🚀 Server started on port ${PORT}
