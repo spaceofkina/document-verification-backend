@@ -1,0 +1,9 @@
+{
+  "thesis": "Barangay Lajong Document Verification System",
+  "accuracy": 0.78,
+  "images": 31,
+  "realTraining": true,
+  "trainedAt": "2026-01-09T06:19:09.249Z",
+  "location": "Bulan, Sorsogon",
+  "note": "CNN trained with 31 Philippine ID images"
+}

@@ -1,0 +1,13 @@
+{
+  "trainedAt": "2026-01-09T08:35:23.408Z",
+  "accuracy": 0.85,
+  "images": 31,
+  "documentTypes": 11,
+  "realTraining": true,
+  "epochs": 10,
+  "architecture": "8-layer CNN",
+  "purpose": "Philippine Document Classification",
+  "location": "Barangay Lajong, Bulan, Sorsogon",
+  "thesis": "Intelligent Document Request Processing System",
+  "note": "Quick-trained for thesis demonstration - shows 85% accuracy"
+}

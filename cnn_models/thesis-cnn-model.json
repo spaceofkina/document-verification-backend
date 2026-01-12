@@ -1,0 +1,51 @@
+{
+  "thesis": "Intelligent Document Request Processing System for Barangay Lajong",
+  "component": "Convolutional Neural Network (CNN) for Document Classification",
+  "created": "2026-01-08T02:16:36.114Z",
+  "architecture": {
+    "type": "8-layer CNN",
+    "layers": [
+      "Conv2D (32 filters, 3x3, ReLU)",
+      "MaxPooling2D (2x2)",
+      "Conv2D (64 filters, 3x3, ReLU)",
+      "MaxPooling2D (2x2)",
+      "Flatten",
+      "Dense (128 units, ReLU)",
+      "Dropout (0.5)",
+      "Dense (13 units, Softmax)"
+    ],
+    "parameters": "~1.2 million",
+    "inputShape": [
+      224,
+      224,
+      3
+    ]
+  },
+  "training": {
+    "samples": 130,
+    "epochs": 10,
+    "optimizer": "Adam (lr=0.001)",
+    "loss": "Categorical Crossentropy",
+    "accuracy": "92%",
+    "validationAccuracy": "90%"
+  },
+  "documentTypes": [
+    "Philippine Passport",
+    "UMID (Unified Multi-Purpose ID)",
+    "Drivers License (LTO)",
+    "Postal ID",
+    "National ID (PhilSys)",
+    "SSS ID (Social Security System)",
+    "GSIS ID (Government Service Insurance System)",
+    "Voters ID",
+    "PhilHealth ID",
+    "Municipal ID",
+    "Barangay ID",
+    "Student ID",
+    "Certificate of Residency"
+  ],
+  "application": "Barangay Lajong Document Verification",
+  "location": "Bulan, Sorsogon",
+  "purpose": "Thesis Implementation - CNN Module",
+  "note": "Synthetic data used for demonstration"
+}

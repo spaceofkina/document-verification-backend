@@ -1,0 +1,13 @@
+{
+  "thesis": "Intelligent Document Request Processing System for Barangay Lajong",
+  "component": "Convolutional Neural Network (CNN) for Document Classification",
+  "framework": "TensorFlow Python",
+  "accuracy": 0.9545454382896423,
+  "trainingImages": 22,
+  "documentTypes": 11,
+  "realTraining": true,
+  "trainingTime": 19.809585332870483,
+  "created": "2026-01-12T09:45:50Z",
+  "purpose": "Barangay Lajong Document Verification",
+  "location": "Bulan, Sorsogon"
+}
