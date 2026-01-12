@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 import pytesseract
 from werkzeug.utils import secure_filename
+import re
 
 # ============================================
 # CORRECT PATHS FOR YOUR STRUCTURE:
@@ -46,7 +47,8 @@ try:
         print(f"✅ Found model, loading...")
         cnn.load_model(model_file)
         print(f"   Model accuracy: {cnn.model_accuracy*100:.1f}%")
-        print(f"   Training images: {cnn.training_stats.get('totalImages', 0)}")
+        if hasattr(cnn, 'training_stats'):
+            print(f"   Training images: {cnn.training_stats.get('totalImages', 0)}")
     else:
         print(f"❌ Model not found at: {model_file}")
         print("   Train first: cd python-ml/cnn && python train_cnn.py")
@@ -54,6 +56,8 @@ try:
         
 except ImportError as e:
     print(f"❌ CNN import error: {e}")
+    import traceback
+    traceback.print_exc()
     CNN_AVAILABLE = False
     cnn = None
 
@@ -67,11 +71,18 @@ def allowed_file(filename):
 def extract_text_from_image(image):
     """Extract text using Tesseract OCR"""
     try:
+        # Convert to grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Apply thresholding
         _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+        
+        # Use Tesseract OCR
         text = pytesseract.image_to_string(thresh, config='--psm 6')
+        
         return text.strip()
-    except:
+    except Exception as e:
+        print(f"OCR Error: {e}")
         return ""
 
 def extract_fields_from_text(text, doc_type):
@@ -81,19 +92,37 @@ def extract_fields_from_text(text, doc_type):
     if not text:
         return fields
     
-    import re
+    # Extract name patterns
+    name_patterns = [
+        r'name[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})',
+        r'full name[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})',
+        r'pangalan[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})',
+        r'last name[:\s]+([A-Z][a-z]+)',
+        r'first name[:\s]+([A-Z][a-z]+)',
+        r'given name[:\s]+([A-Z][a-z]+)'
+    ]
     
-    # Extract name
-    name_match = re.search(r'name[:\s]+([A-Za-z\s]+)', text, re.IGNORECASE)
-    if name_match:
-        fields['fullName'] = name_match.group(1).strip().title()
+    for pattern in name_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            fields['fullName'] = match.group(1).strip()
+            break
     
-    # Extract address
-    address_match = re.search(r'address[:\s]+([A-Za-z0-9\s,.-]+)', text, re.IGNORECASE)
-    if address_match:
-        fields['address'] = address_match.group(1).strip().title()
+    # Extract address patterns
+    address_patterns = [
+        r'address[:\s]+([A-Za-z0-9\s,.-]+(?:Street|St\.|Avenue|Ave\.|Road|Rd\.|Barangay|Brgy\.|Bulan|Sorsogon|Manila))',
+        r'barangay[:\s]+([A-Za-z0-9\s]+)',
+        r'municipality[:\s]+([A-Za-z\s]+)',
+        r'city[:\s]+([A-Za-z\s]+)'
+    ]
     
-    # Extract document number
+    for pattern in address_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            fields['address'] = match.group(1).strip()
+            break
+    
+    # Extract document number based on type
     if 'license' in doc_type.lower():
         license_match = re.search(r'license[:\s]+no[.:\s]*([A-Z0-9-]+)', text, re.IGNORECASE)
         if license_match:
@@ -105,6 +134,123 @@ def extract_fields_from_text(text, doc_type):
     
     return fields
 
+def compare_user_with_ocr(ocr_fields, user_data):
+    """Compare OCR-extracted data with user-provided data"""
+    matches = []
+    mismatches = []
+    warnings = []
+    
+    print(f"\n🔍 Comparing OCR data with user data...")
+    print(f"   OCR Fields: {ocr_fields}")
+    print(f"   User Data: {user_data}")
+    
+    # Check if OCR extracted any meaningful data
+    if not ocr_fields or len(ocr_fields) == 0:
+        warnings.append("OCR could not extract readable information from the ID")
+        return {
+            'matches': matches,
+            'mismatches': mismatches,
+            'warnings': warnings,
+            'matchPercentage': 0.0,
+            'totalFieldsChecked': 0,
+            'matchedFields': 0,
+            'hasDataMismatch': False
+        }
+    
+    # Check name match
+    if 'fullName' in ocr_fields and user_data.get('fullName'):
+        ocr_name = ocr_fields['fullName'].lower().replace(' ', '')
+        user_name = user_data['fullName'].lower().replace(' ', '')
+        
+        # Simple comparison
+        if ocr_name in user_name or user_name in ocr_name:
+            matches.append({
+                'field': 'fullName',
+                'ocr': ocr_fields['fullName'],
+                'user': user_data['fullName'],
+                'match': True
+            })
+            print(f"   ✅ Name matches: OCR='{ocr_fields['fullName']}', User='{user_data['fullName']}'")
+        else:
+            mismatches.append({
+                'field': 'fullName', 
+                'ocr': ocr_fields['fullName'],
+                'user': user_data['fullName'],
+                'match': False
+            })
+            warnings.append(f"Name mismatch: ID shows '{ocr_fields['fullName']}', you entered '{user_data['fullName']}'")
+            print(f"   ❌ Name mismatch: OCR='{ocr_fields['fullName']}', User='{user_data['fullName']}'")
+    
+    # Check address match
+    if 'address' in ocr_fields and user_data.get('address'):
+        ocr_addr = ocr_fields['address'].lower()
+        user_addr = user_data['address'].lower()
+        
+        # Check for common Philippine address keywords
+        barangay_keywords = ['barangay', 'brgy', 'bgy']
+        ocr_has_barangay = any(keyword in ocr_addr for keyword in barangay_keywords)
+        user_has_barangay = any(keyword in user_addr for keyword in barangay_keywords)
+        
+        if ocr_has_barangay and user_has_barangay:
+            # Extract barangay name
+            for keyword in barangay_keywords:
+                if keyword in ocr_addr and keyword in user_addr:
+                    ocr_barangay = ocr_addr.split(keyword)[-1].strip()
+                    user_barangay = user_addr.split(keyword)[-1].strip()
+                    if ocr_barangay and user_barangay and (ocr_barangay in user_barangay or user_barangay in ocr_barangay):
+                        matches.append({
+                            'field': 'address',
+                            'ocr': ocr_fields['address'],
+                            'user': user_data['address'],
+                            'match': True
+                        })
+                        print(f"   ✅ Address matches (same barangay)")
+                        break
+            else:
+                mismatches.append({
+                    'field': 'address',
+                    'ocr': ocr_fields['address'],
+                    'user': user_data['address'],
+                    'match': False
+                })
+                warnings.append(f"Address mismatch: ID shows '{ocr_fields['address']}', you entered '{user_data['address']}'")
+        elif ocr_addr == user_addr:
+            matches.append({
+                'field': 'address',
+                'ocr': ocr_fields['address'],
+                'user': user_data['address'],
+                'match': True
+            })
+            print(f"   ✅ Address matches exactly")
+        else:
+            mismatches.append({
+                'field': 'address',
+                'ocr': ocr_fields['address'],
+                'user': user_data['address'],
+                'match': False
+            })
+            warnings.append(f"Address mismatch: ID shows '{ocr_fields['address']}', you entered '{user_data['address']}'")
+    
+    # Calculate match percentage
+    total_fields = len(ocr_fields)
+    matched_fields = len(matches)
+    match_percentage = (matched_fields / max(total_fields, 1)) * 100
+    
+    print(f"   📊 Match: {matched_fields}/{total_fields} fields ({match_percentage:.1f}%)")
+    
+    # Determine if there's a data mismatch
+    has_data_mismatch = len(mismatches) > 0 or match_percentage < 70
+    
+    return {
+        'matches': matches,
+        'mismatches': mismatches,
+        'warnings': warnings,
+        'matchPercentage': match_percentage,
+        'totalFieldsChecked': total_fields,
+        'matchedFields': matched_fields,
+        'hasDataMismatch': has_data_mismatch
+    }
+
 @app.route('/')
 def home():
     return '''
@@ -115,31 +261,35 @@ def home():
             <p><strong>Thesis:</strong> Intelligent Document Request Processing System</p>
             
             <div style="background: #f0f0f0; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                <h4>📁 Your Philippine ID Structure:</h4>
-                <pre style="background: white; padding: 10px;">
-backend/uploads/real_ids/
-├── primary/
-│   ├── passport/
-│   ├── umid/
-│   ├── drivers_license/
-│   ├── national_id/
-│   ├── postal_id/
-│   ├── sss_id/
-│   ├── voters_id/
-│   └── philhealth_id/
-└── secondary/
-    ├── municipal_id/
-    ├── barangay_id/
-    └── student_id/
-                </pre>
+                <h4>📁 Philippine ID Types Supported:</h4>
+                <ul>
+                    <li>Philippine Passport</li>
+                    <li>UMID (Unified Multi-Purpose ID)</li>
+                    <li>Drivers License (LTO)</li>
+                    <li>Postal ID</li>
+                    <li>National ID (PhilSys)</li>
+                    <li>SSS ID</li>
+                    <li>Voters ID</li>
+                    <li>PhilHealth ID</li>
+                    <li>Municipal ID</li>
+                    <li>Barangay ID</li>
+                    <li>Student ID</li>
+                </ul>
             </div>
             
-            <h4>📤 Test Upload Endpoints:</h4>
+            <h4>📤 Test Endpoints:</h4>
             <ol>
-                <li><strong>CNN Classification:</strong> POST /upload/classify</li>
-                <li><strong>OCR Extraction:</strong> POST /upload/ocr</li>
-                <li><strong>Complete Verification:</strong> POST /upload/verify</li>
+                <li><strong>POST /upload/classify</strong> - CNN Classification</li>
+                <li><strong>POST /upload/ocr</strong> - OCR Text Extraction</li>
+                <li><strong>POST /upload/verify</strong> - Complete Verification (CNN + OCR + Matching)</li>
             </ol>
+            
+            <h4>🔧 For Postman Testing:</h4>
+            <ul>
+                <li>Use <strong>form-data</strong> in Body tab</li>
+                <li>Add field: <code>file</code> (select Philippine ID image)</li>
+                <li>For verification, add: <code>userSelectedType</code>, <code>userFullName</code>, <code>userAddress</code></li>
+            </ul>
         </body>
     </html>
     '''
@@ -151,7 +301,6 @@ def upload_and_classify():
     
     try:
         print(f"\n📤 Received CNN classification request")
-        print(f"   Time: {datetime.now().strftime('%H:%M:%S')}")
         
         # Check if file was uploaded
         if 'file' not in request.files:
@@ -170,41 +319,27 @@ def upload_and_classify():
             return jsonify({'success': False, 'error': 'Invalid file type. Use JPG, PNG'}), 400
         
         print(f"   File: {file.filename}")
-        print(f"   Content-Type: {file.content_type}")
         
         # Save file temporarily
         filename = secure_filename(f"temp_{int(time.time())}_{file.filename}")
         filepath = os.path.join(UPLOAD_FOLDER, filename)
         file.save(filepath)
-        print(f"   Saved to: {filepath}")
-        
-        # Check file size
-        file_size = os.path.getsize(filepath)
-        print(f"   File size: {file_size/1024:.1f} KB")
         
         # Try REAL CNN classification first
         detected_type = "Unknown"
         confidence = 0.0
         is_real_cnn = False
-        cnn_result = None
         
         if CNN_AVAILABLE and cnn and hasattr(cnn, 'classify'):
             try:
-                print(f"   🔍 Calling CNN classification...")
-                cnn_result = cnn.classify(filepath)
-                if cnn_result:
-                    detected_type = cnn_result['detectedIdType']
-                    confidence = cnn_result['confidenceScore']
+                result = cnn.classify(filepath)
+                if result:
+                    detected_type = result['detectedIdType']
+                    confidence = result['confidenceScore']
                     is_real_cnn = True
-                    print(f"   ✅ CNN Result: {detected_type} ({confidence*100:.1f}%)")
-                    
-                    # Show top predictions
-                    if 'topPredictions' in cnn_result:
-                        print(f"   📊 Top predictions:")
-                        for i, pred in enumerate(cnn_result['topPredictions'][:3]):
-                            print(f"      {i+1}. {pred['className']}: {pred['confidence']:.1f}%")
+                    print(f"   ✅ CNN Classification: {detected_type} ({confidence*100:.1f}%)")
             except Exception as e:
-                print(f"   ⚠️ CNN classification error: {e}")
+                print(f"   ⚠️ CNN error: {e}")
         
         # If CNN failed or not available, use image analysis
         if not is_real_cnn:
@@ -214,22 +349,21 @@ def upload_and_classify():
                 height, width = img.shape[:2]
                 aspect_ratio = width / height
                 
-                print(f"   📐 Image: {width}x{height} (aspect: {aspect_ratio:.2f})")
-                
                 if aspect_ratio > 1.4:
                     detected_type = "Philippine Passport"
                     confidence = 0.88
                 elif 1.0 < aspect_ratio <= 1.2:
                     detected_type = "UMID (Unified Multi-Purpose ID)"
                     confidence = 0.82
-                elif width < 500:
-                    detected_type = "Student ID"
-                    confidence = 0.75
                 else:
-                    detected_type = "Drivers License (LTO)"
-                    confidence = 0.85
+                    if width < 500:
+                        detected_type = "Student ID"
+                        confidence = 0.75
+                    else:
+                        detected_type = "Drivers License (LTO)"
+                        confidence = 0.85
         
-        # Generate all predictions
+        # Generate predictions
         id_types = [
             'Philippine Passport',
             'UMID (Unified Multi-Purpose ID)',
@@ -283,17 +417,11 @@ def upload_and_classify():
             'status': 'success',
             'message': 'Philippine document classification completed',
             'system': 'Barangay Lajong Document Verification',
-            'fileInfo': {
-                'filename': file.filename,
-                'mimetype': file.content_type,
-                'size': file_size,
-                'uploadPath': 'backend/uploads/ (real_ids folder for training)'
-            },
             'classification': {
                 'detectedIdType': detected_type,
                 'confidenceScore': confidence,
                 'category': 'Primary' if confidence > 0.7 else 'Secondary',
-                'isAccepted': confidence > 0.6,
+                'isAccepted': True,
                 'allPredictions': predictions[:5],
                 'processingTime': processing_time,
                 'isRealCNN': is_real_cnn,
@@ -303,21 +431,11 @@ def upload_and_classify():
                 'framework': 'TensorFlow Python',
                 'application': 'Barangay Lajong Document Verification',
                 'trainingImages': training_images,
-                'realTraining': True,
-                'thesisDemoMode': not is_real_cnn,
-                'note': 'Using REAL Philippine ID images from backend/uploads/real_ids/' if is_real_cnn else 'Using image analysis'
-            },
-            'thesisInfo': {
-                'title': 'Intelligent Document Request Processing System',
-                'location': 'Barangay Lajong, Bulan, Sorsogon',
-                'purpose': 'Automated Philippine Document Verification'
+                'realTraining': True
             }
         }
         
         print(f"✅ Classification complete in {processing_time}ms")
-        print(f"   Result: {detected_type} ({confidence*100:.1f}%)")
-        print(f"   Using: {'REAL CNN' if is_real_cnn else 'Image Analysis'}")
-        
         return jsonify(response)
         
     except Exception as e:
@@ -399,12 +517,11 @@ def upload_and_ocr():
 
 @app.route('/upload/verify', methods=['POST'])
 def upload_and_verify():
-    """Complete document verification with mismatch detection (THESIS REQUIREMENT)"""
+    """Complete document verification with separate CNN and OCR warnings"""
     start_time = time.time()
     
     try:
         print(f"\n🔍 Received document verification request")
-        print(f"   Time: {datetime.now().strftime('%H:%M:%S')}")
         
         # Get file
         if 'file' not in request.files:
@@ -415,19 +532,22 @@ def upload_and_verify():
         if file.filename == '':
             return jsonify({'success': False, 'error': 'No file selected'}), 400
         
-        # Get user selection (REQUIRED FOR MISMATCH DETECTION)
+        # Get user selection and data
         user_selected = request.form.get('userSelectedType', '')
+        user_fullname = request.form.get('userFullName', '')
+        user_address = request.form.get('userAddress', '')
+        
         if not user_selected:
             return jsonify({'success': False, 'error': 'No document type selected'}), 400
         
         print(f"   User selected: {user_selected}")
+        print(f"   User name: {user_fullname}")
+        print(f"   User address: {user_address}")
         
         # Save file
         filename = secure_filename(f"verify_{int(time.time())}_{file.filename}")
         filepath = os.path.join(UPLOAD_FOLDER, filename)
         file.save(filepath)
-        
-        print(f"   Processing: {file.filename}")
         
         # 1. CNN Classification
         cnn_result = None
@@ -442,25 +562,68 @@ def upload_and_verify():
                     detected_type = cnn_result['detectedIdType']
                     confidence = cnn_result['confidenceScore']
                     is_real_cnn = True
-                    print(f"   ✅ CNN: {detected_type} ({confidence*100:.1f}%)")
+                    print(f"   ✅ CNN detected: {detected_type} ({confidence*100:.1f}%)")
             except Exception as e:
                 print(f"   ⚠️ CNN error: {e}")
         
         # 2. OCR Extraction
         img = cv2.imread(filepath)
         text = ""
-        fields = {}
+        ocr_fields = {}
         
         if img is not None:
             text = extract_text_from_image(img)
-            fields = extract_fields_from_text(text, detected_type)
-            print(f"   📝 OCR: Extracted {len(text)} characters")
+            ocr_fields = extract_fields_from_text(text, detected_type)
+            print(f"   📝 OCR extracted {len(text)} characters")
         
-        # 3. CHECK FOR MISMATCH (THESIS REQUIREMENT)
+        # 3. Compare user data with OCR data
+        user_data = {
+            'fullName': user_fullname,
+            'address': user_address
+        }
+        
+        comparison = compare_user_with_ocr(ocr_fields, user_data)
+        
+        # 4. Check document type mismatch
         is_type_match = user_selected.lower() in detected_type.lower() or detected_type.lower() in user_selected.lower()
-        show_warning = not is_type_match and confidence > 0.6
+        has_cnn_mismatch = not is_type_match and confidence > 0.6
         
-        # 4. Clean up
+        # 5. Check data mismatch
+        has_data_mismatch = comparison.get('hasDataMismatch', False)
+        
+        # 6. Generate appropriate user message
+        user_message = ""
+        system_warning = ""
+        final_recommendation = ""
+        
+        if has_cnn_mismatch and has_data_mismatch:
+            # Both CNN and OCR don't match
+            system_warning = f"DOCUMENT & DATA MISMATCH: System detected {detected_type}, but you selected {user_selected}. Also, your information doesn't match the ID."
+            user_message = f"WARNING: \nOur system detected your provided ID is {detected_type}, \nbut you selected {user_selected} \n\nDo you still want to proceed?"
+            final_recommendation = "REJECT"
+            
+        elif has_cnn_mismatch:
+            # Only CNN doesn't match
+            system_warning = f"DOCUMENT MISMATCH: System detected {detected_type}, but you selected {user_selected}."
+            user_message = f"WARNING: \nOur system detected your provided ID is {detected_type}, \nbut you selected {user_selected} \n\nDo you still want to proceed?"
+            final_recommendation = "REVIEW"
+            
+        elif has_data_mismatch:
+            # Only OCR data doesn't match
+            system_warning = f"DATA MISMATCH: Your information doesn't match the ID."
+            user_message = f"WARNING: \nOur system detected that your information does not \nmatch the information from your provided document \n\nDo you still want to proceed?"
+            final_recommendation = "REVIEW"
+            
+        else:
+            # Everything matches
+            system_warning = "ALL VERIFIED: Document type and information match."
+            user_message = f"The provided documents and information are verified. \nDo you still want to proceed?"
+            final_recommendation = "APPROVE"
+        
+        # 7. Overall verification status
+        is_verified = is_type_match and not has_data_mismatch and confidence > 0.7
+        
+        # 8. Clean up
         try:
             os.remove(filepath)
         except:
@@ -468,73 +631,39 @@ def upload_and_verify():
         
         processing_time = int((time.time() - start_time) * 1000)
         
-        # Prepare mismatch warning message
-        warning_message = ""
-        if show_warning:
-            warning_message = f"WARNING: Our system detected your provided ID is {detected_type}, but you selected {user_selected}. Do you still want to proceed?"
-            print(f"   ⚠️  MISMATCH DETECTED: {user_selected} ≠ {detected_type}")
-        
         response = {
             'status': 'success',
-            'test': 'Philippine ID Mismatch Detection',
             'system': 'Barangay Lajong Document Verification',
-            'scenario': {
-                'userSelected': user_selected,
-                'fileUploaded': file.filename,
-                'expected': f'User claims to upload {user_selected}',
-                'reality': f'System detects {detected_type}'
-            },
-            'cnnClassification': {
-                'detectedIdType': detected_type,
-                'confidenceScore': confidence,
-                'confidencePercentage': int(confidence * 100),
-                'category': 'Primary' if confidence > 0.6 else 'Secondary',
-                'isRealCNN': is_real_cnn,
-                'modelAccuracy': cnn.model_accuracy if CNN_AVAILABLE and cnn else 0.78,
-                'trainingImages': cnn.training_stats.get('totalImages', 0) if CNN_AVAILABLE and cnn else 31
-            },
-            'ocrExtraction': {
-                'confidence': 85 if len(text) > 100 else 39,
-                'extractedFields': fields if fields else {
-                    'fullName': None,
-                    'idNumber': None,
-                    'address': None,
-                    'note': 'Limited text extracted from image'
-                },
-                'sampleText': text[:200] + ('...' if len(text) > 200 else ''),
-                'characterCount': len(text)
-            },
+            'systemWarning': system_warning,
+            'userMessage': user_message,
             'verification': {
-                'isVerified': is_type_match,
-                'confidenceScore': confidence,
-                'confidencePercentage': int(confidence * 100),
+                'isVerified': is_verified,
+                'isDocumentMatch': is_type_match,
+                'isDataMatch': not has_data_mismatch,
+                'dataMatchPercentage': comparison['matchPercentage'],
+                'confidence': confidence,
+                'recommendation': final_recommendation
+            },
+            'cnnResult': {
                 'detectedIdType': detected_type,
                 'userSelectedType': user_selected,
-                'isTypeMatch': is_type_match,
-                'threshold': 0.7,
-                'verificationMethod': 'TensorFlow Python CNN',
-                'thesisComponent': 'Automated Document Verification',
-                'timestamp': datetime.now().isoformat(),
-                'location': 'Barangay Lajong, Bulan, Sorsogon',
-                'systemAccuracy': cnn.model_accuracy if CNN_AVAILABLE and cnn else 0.78
+                'confidence': confidence,
+                'isRealCNN': is_real_cnn,
+                'isTypeMatch': is_type_match
             },
-            'systemAction': {
-                'action': 'PROCEED' if is_type_match else 'REVIEW',
-                'message': 'Philippine document matches selection' if is_type_match else f'Document type mismatch detected',
-                'showWarning': show_warning,
-                'warningMessage': warning_message,
-                'recommendation': 'You may proceed' if is_type_match else 'Please verify document type'
+            'ocrComparison': {
+                'userProvided': user_data,
+                'ocrExtracted': ocr_fields,
+                'matchPercentage': comparison['matchPercentage'],
+                'hasDataMismatch': has_data_mismatch
             },
-            'thesisSignificance': 'Demonstrates automated error detection in Philippine document submission',
-            'realWorldApplication': 'Prevents processing errors when users select wrong Philippine document type',
             'processingTime': processing_time,
-            'backend': 'Python TensorFlow + OCR',
-            'note': 'Testing Barangay Lajong Document Verification System'
+            'thesisComponent': 'Automated Document Verification System',
+            'note': 'CNN checks document type, OCR verifies user information'
         }
         
         print(f"✅ Verification complete in {processing_time}ms")
-        print(f"   Match: {'✅' if is_type_match else '❌'}")
-        print(f"   Warning shown: {'✅' if show_warning else '❌'}")
+        print(f"   Result: {system_warning}")
         
         return jsonify(response)
         
@@ -561,25 +690,12 @@ def train_status():
         'model_loaded': CNN_AVAILABLE and cnn and hasattr(cnn, 'model') and cnn.model is not None,
         'model_accuracy': cnn.model_accuracy if CNN_AVAILABLE and cnn and hasattr(cnn, 'model_accuracy') else 0.0,
         'training_images': cnn.training_stats.get('totalImages', 0) if CNN_AVAILABLE and cnn and hasattr(cnn, 'training_stats') else 0,
-        'data_path': get_real_ids_path()
+        'data_path': real_ids_path
     })
 
-@app.route('/debug/paths', methods=['GET'])
-def debug_paths():
-    """Debug endpoint to show all paths"""
-    paths = {
-        'current_dir': current_dir,
-        'cnn_path': cnn_path,
-        'upload_folder': UPLOAD_FOLDER,
-        'real_ids_path': get_real_ids_path(),
-        'model_path': os.path.join(current_dir, '..', 'saved_models', 'ph_document_cnn.keras'),
-        'model_exists': os.path.exists(os.path.join(current_dir, '..', 'saved_models', 'ph_document_cnn.keras')),
-        'python_ml_dir': os.path.join(current_dir, '..'),
-        'backend_dir': os.path.join(current_dir, '..', '..')
-    }
-    return jsonify(paths)
 @app.route('/check-paths', methods=['GET'])
 def check_paths():
+    """Debug endpoint to show all paths"""
     return jsonify({
         'current_dir': current_dir,
         'real_ids_path': real_ids_path,
@@ -592,21 +708,28 @@ if __name__ == '__main__':
     print("\n" + "="*60)
     print("🚀 PHILIPPINE DOCUMENT VERIFICATION API")
     print("="*60)
+    print("🇵🇭 Barangay Lajong Document Verification System")
     print(f"📁 API Location: {current_dir}")
-    print(f"📂 Philippine IDs: {real_ids_path}")
-    print(f"🧠 Model Path: {saved_models_path}/ph_document_cnn.keras")
-    print(f"✅ CNN Available: {CNN_AVAILABLE}")
     
-    if CNN_AVAILABLE and cnn and hasattr(cnn, 'model_accuracy'):
-        print(f"🎯 Model Accuracy: {cnn.model_accuracy*100:.1f}%")
+    # Check CNN status
+    print(f"\n🧠 CNN Status:")
+    print(f"   Available: {CNN_AVAILABLE}")
+    if CNN_AVAILABLE and cnn:
+        if hasattr(cnn, 'model') and cnn.model is not None:
+            print(f"   Model loaded: ✅")
+            if hasattr(cnn, 'model_accuracy'):
+                print(f"   Accuracy: {cnn.model_accuracy*100:.1f}%")
+        else:
+            print(f"   Model loaded: ❌ (Train first)")
     
-    print("\n📡 TEST ENDPOINTS:")
-    print("   POST /upload/classify")
-    print("   POST /upload/verify  ← For mismatch testing")
-    print("\n🎓 THESIS TEST:")
-    print("   Upload Driver's License")
-    print("   Set userSelectedType to 'Postal ID' (wrong)")
-    print("   Get WARNING message")
+    print(f"\n📡 TEST ENDPOINTS (Use Postman with Form-Data):")
+    print("   1. POST /upload/classify     - CNN Classification")
+    print("   2. POST /upload/ocr          - OCR Text Extraction")
+    print("   3. POST /upload/verify       - Complete Verification")
+    print("\n🎓 THESIS TEST SCENARIOS:")
+    print("   A. CNN Mismatch: Upload DL, select 'Postal ID'")
+    print("   B. OCR Mismatch: Upload DL, enter wrong name/address")
+    print("   C. Both Match: Upload DL, select 'DL', enter correct info")
     print("="*60)
     
     app.run(host='0.0.0.0', port=5000, debug=True)
