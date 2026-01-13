@@ -1,5 +1,5 @@
 const express = require('express');
-const mongoose = require('mongoose');  // ADD THIS
+const mongoose = require('mongoose');
 require('dotenv').config();
 
 const app = express();
@@ -35,19 +35,21 @@ connectDB();
 const apiRoutes = require('./src/routes/api');
 const authRoutes = require('./src/routes/authRoutes');
 const userRoutes = require('./src/routes/userRoutes');
+const documentRoutes = require('./src/routes/documentRoutes'); // ADD THIS
 
 // Use API routes
 app.use('/api', apiRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/documents', documentRoutes); // ADD THIS
 
 // Basic routes
 app.get('/', (req, res) => {
     res.json({
         system: 'Brgy Lajong Document Request System',
-        version: '1.0.0',
+        version: '2.0.0',
         api: 'Visit /api',
-        features: ['CNN ID Verification', 'OCR Processing', 'Document Generation'],
+        features: ['CNN ID Verification', 'OCR Processing', 'Document Generation', 'Document Request Management'],
         status: 'running'
     });
 });
@@ -55,12 +57,11 @@ app.get('/', (req, res) => {
 // CNN test route
 app.get('/cnn-test', async (req, res) => {
     try {
-        // Test if CNN service loads
         const cnnService = require('./src/services/cnnService');
         res.json({
             status: 'success',
             message: 'CNN service loaded successfully',
-            model: '7-layer TensorFlow.js CNN',
+            model: 'Python TensorFlow CNN',
             idTypes: cnnService.idTypes
         });
     } catch (error) {
@@ -77,7 +78,14 @@ app.get('/health', (req, res) => {
     res.json({
         status: 'healthy',
         timestamp: new Date().toISOString(),
-        service: 'document-request-system'
+        service: 'document-request-system',
+        features: {
+            authentication: true,
+            cnn: true,
+            ocr: true,
+            document_requests: true,
+            database: true
+        }
     });
 });
 
@@ -88,6 +96,12 @@ app.listen(PORT, () => {
     📍 Local: http://localhost:${PORT}
     🌐 API: http://localhost:${PORT}/api
     🏥 Health: http://localhost:${PORT}/health
+    
+    📋 Available Endpoints:
+    🔐 Auth: /api/auth/*
+    👤 Users: /api/users/*
+    📄 Documents: /api/documents/*
+    🤖 AI Services: /api/* (CNN/OCR)
     
     Default admin: adminclient@barangay.com
     Password: brgylajong321_clnt
