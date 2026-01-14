@@ -1,24 +1,24 @@
 {
-  "totalImages": 22,
+  "totalImages": 43,
   "documentTypes": 11,
-  "accuracy": 0.9545454382896423,
+  "accuracy": 0.9767441749572754,
   "realTraining": true,
-  "trainingDate": "2026-01-12T09:45:49Z",
-  "epochs": 15,
+  "trainingDate": "2026-01-14T14:01:17Z",
+  "epochs": 12,
   "batchSize": 4,
   "imageStats": {
-    "Philippine Passport": 2,
-    "UMID (Unified Multi-Purpose ID)": 2,
-    "Drivers License (LTO)": 2,
+    "Philippine Passport": 4,
+    "UMID (Unified Multi-Purpose ID)": 3,
+    "Drivers License (LTO)": 7,
     "Postal ID": 2,
-    "National ID (PhilSys)": 2,
-    "SSS ID (Social Security System)": 2,
-    "Voters ID": 2,
-    "PhilHealth ID": 2,
-    "Municipal ID": 2,
+    "National ID (PhilSys)": 8,
+    "SSS ID (Social Security System)": 3,
+    "Voters ID": 3,
+    "PhilHealth ID": 5,
+    "Municipal ID": 3,
     "Barangay ID": 2,
-    "Student ID": 2
+    "Student ID": 3
   },
-  "trainingTime": 19.809585332870483,
+  "trainingTime": 26.997580528259277,
   "note": "Trained with available images (no validation split)"
 }

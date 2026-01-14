@@ -16,6 +16,7 @@
     "@tensorflow/tfjs-node": "4.22.0",
     "axios": "^1.13.2",
     "bcryptjs": "^2.4.3",
+    "canvas": "^3.2.1",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.22.1",
