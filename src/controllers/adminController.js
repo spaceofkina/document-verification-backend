@@ -394,6 +394,363 @@ exports.downloadPDF = async (req, res) => {
     }
 };
 
+// === NEW: Get admin notifications ===
+exports.getAdminNotifications = async (req, res) => {
+    try {
+        const [
+            newRequests,
+            pendingVerification,
+            readyToClaim,
+            recentActivity
+        ] = await Promise.all([
+            DocumentRequest.countDocuments({ 
+                status: 'pending',
+                dateRequested: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+            }),
+            DocumentRequest.countDocuments({ 
+                status: { $in: ['under-review', 'verified'] } 
+            }),
+            DocumentRequest.countDocuments({ 
+                status: 'ready-to-claim' 
+            }),
+            DocumentRequest.find()
+                .populate('userId', 'firstName lastName email')
+                .sort({ dateRequested: -1 })
+                .limit(10)
+                .select('documentType status dateRequested requestId trackingCode')
+        ]);
+        
+        const notifications = [];
+        
+        if (newRequests > 0) {
+            notifications.push({
+                type: 'new_requests',
+                title: 'New Requests',
+                message: `${newRequests} new document requests today`,
+                priority: 'high',
+                actionUrl: '/admin/requests?status=pending',
+                icon: 'add_circle',
+                timestamp: new Date()
+            });
+        }
+        
+        if (pendingVerification > 0) {
+            notifications.push({
+                type: 'pending_verification',
+                title: 'Pending Verification',
+                message: `${pendingVerification} documents need verification`,
+                priority: 'medium',
+                actionUrl: '/admin/requests?status=under-review',
+                icon: 'search',
+                timestamp: new Date()
+            });
+        }
+        
+        if (readyToClaim > 0) {
+            notifications.push({
+                type: 'ready_to_claim',
+                title: 'Ready for Claiming',
+                message: `${readyToClaim} documents are ready to be claimed`,
+                priority: 'medium',
+                actionUrl: '/admin/requests?status=ready-to-claim',
+                icon: 'description',
+                timestamp: new Date()
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: {
+                notifications,
+                counts: {
+                    newRequests,
+                    pendingVerification,
+                    readyToClaim
+                },
+                recentActivity: recentActivity.map(activity => ({
+                    id: activity._id,
+                    userId: activity.userId?._id,
+                    userName: activity.userId ? `${activity.userId.firstName} ${activity.userId.lastName}` : 'Unknown',
+                    userEmail: activity.userId?.email,
+                    documentType: activity.documentType,
+                    status: activity.status,
+                    dateRequested: activity.dateRequested,
+                    requestId: activity.requestId,
+                    trackingCode: activity.trackingCode
+                }))
+            }
+        });
+    } catch (error) {
+        console.error('Get admin notifications error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// === NEW: Get user management ===
+exports.getUsers = async (req, res) => {
+    try {
+        const { role, search, page = 1, limit = 20 } = req.query;
+        
+        let query = {};
+        if (role) query.role = role;
+        if (search) {
+            query.$or = [
+                { firstName: { $regex: search, $options: 'i' } },
+                { lastName: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } }
+            ];
+        }
+        
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        
+        const [users, total] = await Promise.all([
+            User.find(query)
+                .select('-password')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit)),
+            User.countDocuments(query)
+        ]);
+        
+        // Get request counts for each user
+        const usersWithStats = await Promise.all(
+            users.map(async (user) => {
+                const [requestCount, pendingCount, claimedCount] = await Promise.all([
+                    DocumentRequest.countDocuments({ userId: user._id }),
+                    DocumentRequest.countDocuments({ 
+                        userId: user._id,
+                        status: { $in: ['pending', 'under-review', 'verified', 'ready-to-claim'] }
+                    }),
+                    DocumentRequest.countDocuments({ 
+                        userId: user._id,
+                        status: 'claimed'
+                    })
+                ]);
+                
+                return {
+                    ...user.toObject(),
+                    requestCount,
+                    pendingCount,
+                    claimedCount,
+                    lastRequest: await DocumentRequest.findOne({ userId: user._id })
+                        .sort({ dateRequested: -1 })
+                        .select('dateRequested documentType status')
+                };
+            })
+        );
+        
+        res.json({
+            success: true,
+            data: usersWithStats,
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total,
+                pages: Math.ceil(total / parseInt(limit))
+            },
+            summary: {
+                totalUsers: total,
+                adminCount: await User.countDocuments({ role: 'admin' }),
+                staffCount: await User.countDocuments({ role: 'staff' }),
+                userCount: await User.countDocuments({ role: 'user' })
+            }
+        });
+    } catch (error) {
+        console.error('Get users error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// === NEW: Update user (admin only) ===
+exports.updateUser = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
+        const adminId = req.user.id;
+        
+        // Allowed fields for admin update
+        const allowedUpdates = [
+            'firstName', 'lastName', 'barangayName', 
+            'contactNumber', 'address', 'role', 'isActive'
+        ];
+        
+        // Filter updates
+        const filteredUpdates = {};
+        allowedUpdates.forEach(field => {
+            if (updates[field] !== undefined) {
+                filteredUpdates[field] = updates[field];
+            }
+        });
+        
+        // Prevent admin from removing all admins
+        if (filteredUpdates.role && filteredUpdates.role !== 'admin') {
+            const adminCount = await User.countDocuments({ role: 'admin' });
+            const user = await User.findById(id);
+            
+            if (user.role === 'admin' && adminCount <= 1) {
+                return res.status(400).json({
+                    error: 'Cannot remove the only admin account',
+                    message: 'There must be at least one admin account'
+                });
+            }
+        }
+        
+        // Update user
+        const user = await User.findByIdAndUpdate(
+            id,
+            { 
+                $set: filteredUpdates,
+                $addToSet: { 
+                    updatedBy: { 
+                        adminId, 
+                        date: new Date(), 
+                        changes: Object.keys(filteredUpdates) 
+                    } 
+                }
+            },
+            { new: true, runValidators: true }
+        ).select('-password');
+        
+        res.json({
+            success: true,
+            message: 'User updated successfully',
+            data: user,
+            changes: Object.keys(filteredUpdates)
+        });
+    } catch (error) {
+        console.error('Update user error:', error);
+        res.status(500).json({ error: 'Server error updating user' });
+    }
+};
+
+// === NEW: Create user notification (admin to user) ===
+exports.createUserNotification = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { type, title, message, priority, actionUrl } = req.body;
+        
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        const Notification = require('../models/Notification');
+        const notification = await Notification.createNotification(
+            userId,
+            type || 'admin_message',
+            title,
+            message,
+            { adminId: req.user.id },
+            priority || 'medium',
+            actionUrl
+        );
+        
+        res.status(201).json({
+            success: true,
+            message: 'Notification sent to user',
+            data: notification
+        });
+    } catch (error) {
+        console.error('Create user notification error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// === NEW: Get admin dashboard overview ===
+exports.getAdminDashboard = async (req, res) => {
+    try {
+        const today = new Date();
+        const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        const startOfWeek = new Date(today);
+        startOfWeek.setDate(today.getDate() - today.getDay());
+        
+        const [
+            totalRequests,
+            pendingRequests,
+            verifiedRequests,
+            readyToClaim,
+            claimedRequests,
+            monthlyRequests,
+            weeklyRequests,
+            documentTypeStats,
+            userStats,
+            recentActivity
+        ] = await Promise.all([
+            DocumentRequest.countDocuments(),
+            DocumentRequest.countDocuments({ status: { $in: ['pending', 'under-review'] } }),
+            DocumentRequest.countDocuments({ status: 'verified' }),
+            DocumentRequest.countDocuments({ status: 'ready-to-claim' }),
+            DocumentRequest.countDocuments({ status: 'claimed' }),
+            DocumentRequest.countDocuments({ dateRequested: { $gte: startOfMonth } }),
+            DocumentRequest.countDocuments({ dateRequested: { $gte: startOfWeek } }),
+            DocumentRequest.aggregate([
+                { 
+                    $group: { 
+                        _id: '$documentType', 
+                        total: { $sum: 1 },
+                        pending: { 
+                            $sum: { $cond: [{ $in: ['$status', ['pending', 'under-review']] }, 1, 0] } 
+                        },
+                        ready: { 
+                            $sum: { $cond: [{ $eq: ['$status', 'ready-to-claim'] }, 1, 0] } 
+                        },
+                        claimed: { 
+                            $sum: { $cond: [{ $eq: ['$status', 'claimed'] }, 1, 0] } 
+                        }
+                    } 
+                },
+                { $sort: { total: -1 } }
+            ]),
+            User.aggregate([
+                { $group: { _id: '$role', count: { $sum: 1 } } },
+                { $sort: { count: -1 } }
+            ]),
+            DocumentRequest.find()
+                .populate('userId', 'firstName lastName email')
+                .sort({ dateRequested: -1 })
+                .limit(10)
+        ]);
+        
+        res.json({
+            success: true,
+            data: {
+                requestStats: {
+                    total: totalRequests,
+                    pending: pendingRequests,
+                    verified: verifiedRequests,
+                    readyToClaim: readyToClaim,
+                    claimed: claimedRequests,
+                    monthly: monthlyRequests,
+                    weekly: weeklyRequests
+                },
+                documentTypeStats,
+                userStats,
+                recentActivity: recentActivity.map(activity => ({
+                    id: activity._id,
+                    user: activity.userId ? {
+                        name: `${activity.userId.firstName} ${activity.userId.lastName}`,
+                        email: activity.userId.email
+                    } : null,
+                    documentType: activity.documentType,
+                    status: activity.status,
+                    dateRequested: activity.dateRequested,
+                    requestId: activity.requestId,
+                    trackingCode: activity.trackingCode
+                })),
+                quickActions: [
+                    { label: 'View All Requests', action: 'requests', url: '/admin/requests', icon: 'list_alt' },
+                    { label: 'User Management', action: 'users', url: '/admin/users', icon: 'people' },
+                    { label: 'Generate Reports', action: 'reports', url: '/admin/reports', icon: 'assessment' },
+                    { label: 'System Settings', action: 'settings', url: '/admin/settings', icon: 'settings' }
+                ]
+            }
+        });
+    } catch (error) {
+        console.error('Get admin dashboard error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
 // === NEW: Get Available Templates ===
 exports.getAvailableTemplates = async (req, res) => {
     try {
