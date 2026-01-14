@@ -36,12 +36,14 @@ const apiRoutes = require('./src/routes/api');
 const authRoutes = require('./src/routes/authRoutes');
 const userRoutes = require('./src/routes/userRoutes');
 const documentRoutes = require('./src/routes/documentRoutes'); // ADD THIS
+const notificationRoutes = require('./src/routes/notificationRoutes'); // ADD THIS
 
 // Use API routes
 app.use('/api', apiRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/documents', documentRoutes); // ADD THIS
+app.use('/api/notifications', notificationRoutes); // ADD THIS
 
 // Basic routes
 app.get('/', (req, res) => {
