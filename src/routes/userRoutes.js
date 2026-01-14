@@ -11,7 +11,12 @@ router.get('/:id', userController.getUserProfile);
 router.put('/:id', userController.updateProfile);
 router.put('/:id/password', userController.changePassword);
 
-// Notifications
-router.get('/:id/notifications', userController.getNotifications);
+// NEW: User dashboard features
+router.get('/:id/dashboard', userController.getDashboardOverview);
+router.get('/:id/eligibility', userController.getRequestEligibility);
+router.get('/:id/activity', userController.getActivityLog);
+
+// Notifications (using separate notification controller)
+// This will be handled by notificationRoutes.js
 
 module.exports = router;
